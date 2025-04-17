@@ -1,0 +1,2 @@
+Contact Us page
+/send_msg       sending message
