@@ -2,19 +2,25 @@ import streamlit as st
 from PIL import Image
 import os
 import requests
+from io import BytesIO
+from datetime import datetime
 
 # Load logo
 logo_path = os.path.join("..", "Images", "logo.png")
 logo = Image.open(logo_path)
 
-TYPE = None
-
 # Page config
 st.set_page_config(page_title="Photo Fission", layout="wide")
 
+# Initialize session state
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = []
+if "sorting_type" not in st.session_state:
+    st.session_state.sorting_type = None
+
 # Sidebar (Navbar)
 with st.sidebar:
-    st.image(logo, width=100)  # Resize as needed
+    st.image(logo, width=100)
     st.title("Photo Fission")
     navigation = st.radio("Navigate", ["🏠 Home", "📞 Contact Us", "ℹ️ About"])
 
@@ -23,33 +29,43 @@ if navigation == "🏠 Home":
     st.title("Photo Fission")
     st.write("This app is used to sort the images of any sport based on the team and jersey number.")
 
-    # Image upload
     uploaded_files = st.file_uploader("Choose images...", accept_multiple_files=True, type=["jpg", "jpeg", "png"])
-
     if uploaded_files:
-        for file in uploaded_files:
+        st.session_state.uploaded_files = uploaded_files
+
+    # Optional preview
+    if st.checkbox("Preview uploaded images"):
+        for file in st.session_state.uploaded_files:
             image = Image.open(file)
-            st.image(image, caption=f"Uploaded Image: {file.name}")
+            st.image(image, caption=f"Uploaded: {file.name}", use_column_width=True)
 
     # Sorting type
-    sorting_type = st.radio("Sorting Type", ["Team Name", "Jersey Number"], index=0)
-    if sorting_type == "Team Name":
-        TYPE = "Team Name"
-    else:
-        TYPE = "Jersey Number"
-        
+    sorting_type = st.radio("Sorting Type", ["Team Name", "Jersey Number"], index=None)
+    st.session_state.sorting_type = sorting_type
+
     if st.button("Sort Image"):
-        if TYPE:
-            if uploaded_files:
-                st.success(f"Image sorted based on {TYPE}")
-                # You can save the image like this if you want:
-                # save_path = os.path.join("sorted_images", team, str(jersey_number))
-                # os.makedirs(save_path, exist_ok=True)
-                # image.save(os.path.join(save_path, file.name))
-            else:
-                st.error("Please select files!!")
+        if not st.session_state.sorting_type:
+            st.error("Please select sorting type!!")
+        elif not st.session_state.uploaded_files:
+            st.error("Please select files!!")
         else:
-            st.error("Please enter both team and jersey number to sort the image.")
+            with st.spinner("Uploading and sorting images..."):
+                compressed_files = []
+                for file in st.session_state.uploaded_files:
+                    img = Image.open(file)
+                    buffer = BytesIO()
+                    img.convert("RGB").save(buffer, format="JPEG", quality=70)
+                    buffer.seek(0)
+                    compressed_files.append(("files", (file.name, buffer, "image/jpeg")))
+
+                try:
+                    resp = requests.post("http://localhost:8000/team_name", files=compressed_files)
+                    if resp.status_code == 200:
+                        st.success(f"{resp.json()['msg']}. Images sorted by {st.session_state.sorting_type}")
+                    else:
+                        st.error(f"Error: {resp.status_code} - {resp.text}")
+                except Exception as e:
+                    st.error(f"Request failed: {str(e)}")
 
 elif navigation == "📞 Contact Us":
     st.title("📞 Contact Us")
@@ -59,16 +75,25 @@ elif navigation == "📞 Contact Us":
         name = st.text_input("Your Name")
         email = st.text_input("Your Email")
         message = st.text_area("Message")
-
-        submitted = st.form_submit_button("Send Message")
+        submitted = st.form_submit_button("Send")
 
         if submitted:
             if name and email and message:
-                respData = requests.post("http://0.0.0.0:8000/send_msg", data={"name":name, "email": email, "message": message})
-                st.success("Thanks for contacting us! We'll get back to you soon.")
-                # You can also add logic to send this data to an email or API
+                with st.spinner("Sending your message..."):
+                    try:
+                        response = requests.post(
+                            "http://localhost:8000/send_msg",
+                            json={"name": name, "email": email, "message": message}
+                        )
+                        if response.status_code == 200:
+                            st.success("✅ Thank you! Your message has been sent.")
+                            print(datetime.now().strftime("%H:%M:%S"))
+                        else:
+                            st.error(f"❌ Error: {response.status_code}")
+                    except Exception as e:
+                        st.error(f"❌ Failed to send: {str(e)}")
             else:
-                st.error("Please fill out all fields before submitting.")
+                st.warning("⚠️ Please fill all fields.")
 
 elif navigation == "ℹ️ About":
     st.title("About Photo Fission")
