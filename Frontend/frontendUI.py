@@ -4,6 +4,10 @@ import os
 import requests
 from io import BytesIO
 from datetime import datetime
+import base64
+import time
+import io
+from zipfile import ZipFile
 
 # Load logo
 logo_path = os.path.join("..", "Images", "logo.png")
@@ -17,14 +21,71 @@ if "uploaded_files" not in st.session_state:
     st.session_state.uploaded_files = []
 if "sorting_type" not in st.session_state:
     st.session_state.sorting_type = None
+if "sorted_images" not in st.session_state:
+    st.session_state.sorted_images = {}
+if "current_path" not in st.session_state:
+    st.session_state.current_path = []
+
+# Utility: download link for individual image
+def generate_download_link(file_name, b64_data):
+    href = f'<a href="data:image/jpeg;base64,{b64_data}" download="{file_name}">📥 Download</a>'
+    return href
+
+# Utility: recursive folder renderer
+def render_folder(folder, path=[]):
+    st.markdown("### 📁 Explorer")
+    
+    if path:
+        if st.button("🔙 Go Back"):
+            st.session_state.current_path = path[:-1]
+            st.rerun()
+            return
+    image_entries = []
+    for key, value in folder.items():
+        full_path = path + [key]
+        if isinstance(value, dict):
+            col1, col2 = st.columns([5, 1])
+            with col1:
+                if st.button("📂 " + key, key="/".join(full_path)):
+                    st.session_state.current_path = full_path
+                    st.rerun()
+            with col2:
+                if st.button("📦", key="zip_" + "/".join(full_path)):
+                    buffer = io.BytesIO()
+                    with ZipFile(buffer, "w") as zip_file:
+                        def add_to_zip(subfolder, path_prefix):
+                            for name, item in subfolder.items():
+                                if isinstance(item, dict):
+                                    add_to_zip(item, path_prefix + [name])
+                                else:
+                                    image_bytes = base64.b64decode(item)
+                                    filename = "/".join(path_prefix + [name])
+                                    zip_file.writestr(filename, image_bytes)
+                        add_to_zip(value, full_path)
+                    buffer.seek(0)
+                    b64 = base64.b64encode(buffer.read()).decode()
+                    href = f'<a href="data:application/zip;base64,{b64}" download="{key}.zip">📥 Download ZIP</a>'
+                    st.markdown(href, unsafe_allow_html=True)
+        else:
+            image_entries.append((key, value, full_path))
+        # Grid display for images
+    if image_entries:
+        st.markdown("### 🖼️ Images")
+        cols = st.columns(4)
+        for idx, (name, b64_img, full_path) in enumerate(image_entries):
+            with cols[idx % 4]:
+                img = Image.open(BytesIO(base64.b64decode(b64_img)))
+                st.image(img, caption="/".join(full_path))
+                href = generate_download_link(name, b64_img)
+                st.markdown(href, unsafe_allow_html=True)
 
 # Sidebar (Navbar)
 with st.sidebar:
     st.image(logo, width=100)
     st.title("Photo Fission")
-    navigation = st.radio("Navigate", ["🏠 Home", "📞 Contact Us", "ℹ️ About"])
+    navigation = st.radio("Navigate", ["🏠 Home", "📁 Explorer", "📞 Contact Us", "ℹ️ About"])
 
-# Main section based on navigation
+# Main sections
 if navigation == "🏠 Home":
     st.title("Photo Fission")
     st.write("This app is used to sort the images of any sport based on the team and jersey number.")
@@ -37,35 +98,50 @@ if navigation == "🏠 Home":
     if st.checkbox("Preview uploaded images"):
         for file in st.session_state.uploaded_files:
             image = Image.open(file)
-            st.image(image, caption=f"Uploaded: {file.name}", use_column_width=True)
+            st.image(image, caption=f"Uploaded: {file.name}")
 
     # Sorting type
     sorting_type = st.radio("Sorting Type", ["Team Name", "Jersey Number"], index=None)
     st.session_state.sorting_type = sorting_type
 
     if st.button("Sort Image"):
-        if not st.session_state.sorting_type:
-            st.error("Please select sorting type!!")
-        elif not st.session_state.uploaded_files:
-            st.error("Please select files!!")
+        if not st.session_state.sorting_type or not st.session_state.uploaded_files:
+            st.error("Select sorting type and files!")
         else:
             with st.spinner("Uploading and sorting images..."):
-                compressed_files = []
+                files = []
                 for file in st.session_state.uploaded_files:
-                    img = Image.open(file)
-                    buffer = BytesIO()
-                    img.convert("RGB").save(buffer, format="JPEG", quality=70)
-                    buffer.seek(0)
-                    compressed_files.append(("files", (file.name, buffer, "image/jpeg")))
+                    files.append(("files", (file.name, file, "image/jpeg")))
 
-                try:
-                    resp = requests.post("http://localhost:8000/team_name", files=compressed_files)
-                    if resp.status_code == 200:
-                        st.success(f"{resp.json()['msg']}. Images sorted by {st.session_state.sorting_type}")
-                    else:
-                        st.error(f"Error: {resp.status_code} - {resp.text}")
-                except Exception as e:
-                    st.error(f"Request failed: {str(e)}")
+                if st.session_state.sorting_type == "Team Name":
+                    resp = requests.post("http://localhost:8000/team_name", files=files)
+                    task_id = resp.json()["task_id"]
+                elif st.session_state.sorting_type == "Jersey Number":
+                    resp = requests.post("http://localhost:8000/jersey_number", files=files)
+                    task_id = resp.json()["task_id"]
+
+                while True:
+                    result = requests.get(f"http://localhost:8000/get_images/{task_id}").json()
+                    if result["status"] == "done":
+                        break
+                    time.sleep(1)
+
+                st.session_state.sorted_images = result["images"]
+                st.session_state.current_path = []
+
+                st.success("✅ Images sorted and resized!")
+
+if navigation == "📁 Explorer":
+    if st.session_state.sorted_images:
+        def get_nested_folder(path, folder):
+            for p in path:
+                folder = folder[p]
+            return folder
+
+        nested_folder = get_nested_folder(st.session_state.current_path, st.session_state.sorted_images)
+        render_folder(nested_folder, st.session_state.current_path)
+    else:
+        st.warning("⚠️ No sorted images available. Please upload and sort images first.")
 
 elif navigation == "📞 Contact Us":
     st.title("📞 Contact Us")

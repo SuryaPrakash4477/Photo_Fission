@@ -1,7 +1,8 @@
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel, EmailStr
-from tasks import send_email_background
+from tasks import send_email_background, resize_image
 import os
+from celery.result import AsyncResult
 app = FastAPI()
 
 class ContactForm(BaseModel):
@@ -9,22 +10,43 @@ class ContactForm(BaseModel):
     email: EmailStr
     message: str
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SORTED_FOLDER = os.path.join(BASE_DIR, "Sorted_Images")
-os.makedirs(SORTED_FOLDER, exist_ok=True)
-
 @app.post("/team_name")
 async def sortImage_based_teamName(files: list[UploadFile] = File(...)):
     """API to sort image according to the team name!!"""
-    if files:
-        for file in files:
-            file_bytes = await file.read()
-            file_path = os.path.join(SORTED_FOLDER, file.filename)
-            with open(file_path, "wb") as f:
-                f.write(file_bytes)
-    return {"msg":"Got your photos and it is under process"}
+    image_payload = []
+    for file in files:
+        content = await file.read()
+        image_payload.append({
+            "filename": file.filename,
+            "content": content
+        })
+
+    task = resize_image.delay(image_payload)
+    return {"task_id": task.id, "msg": "Resizing in progress"}
+
+
+@app.post("/jersey_number")
+async def sortImage_based_jerseyNumber(files: list[UploadFile] = File(...)):
+    """API to sort image according to the jersey number!!"""
+    image_payload = []
+    for file in files:
+        content = await file.read()
+        image_payload.append({
+            "filename": file.filename,
+            "content": content
+        })
+    task = resize_image.delay(image_payload)
+    return {"task_id": task.id, "msg": "Resizing in Progress"}
 
 @app.post("/send_msg")
 async def send_contact_email(data: ContactForm):
     send_email_background.delay(data.name, data.email, data.message)
     return {"message": "Email is being sent in the background"}
+
+
+@app.get("/get_images/{task_id}")
+def get_task_result(task_id: str):
+    res = AsyncResult(task_id, app=resize_image)
+    if res.ready():
+        return {"status": "done", "images": res.result}
+    return {"status": "processing"}

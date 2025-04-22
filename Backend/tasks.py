@@ -3,6 +3,9 @@ from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 import os
 from dotenv import load_dotenv
 from datetime import datetime
+import base64
+from PIL import Image, ImageOps
+from io import BytesIO
 
 load_dotenv()
 
@@ -66,3 +69,41 @@ def send_email_background(name, email, message):
     asyncio.set_event_loop(loop)
     loop.run_until_complete(fm.send_message(admin_message))
     loop.run_until_complete(fm.send_message(user_message))
+
+
+@celery.task
+def resize_image(image_data_list):
+    counter = 0
+    fixed_size = (224, 224)
+    results = {
+                "Team_A": {},
+                "Team_B": {}
+            }
+
+    for img_data in image_data_list:
+        counter += 1
+        filename = img_data["filename"]
+        content = img_data["content"]
+        
+        image = Image.open(BytesIO(content))
+
+        # Convert to RGB if image has alpha channel (RGBA)
+        if image.mode == "RGBA":
+            image = image.convert("RGB")
+        elif image.mode != "RGB":
+            image = image.convert("RGB")
+
+        image = ImageOps.fit(image, fixed_size)
+
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG")
+        buffer.seek(0)
+        b64_img = base64.b64encode(buffer.read()).decode("utf-8")
+        if counter >= 4:
+            results["Team_B"][filename] = b64_img
+        else:
+            results["Team_A"][filename] = b64_img
+
+    print(results)
+
+    return results
