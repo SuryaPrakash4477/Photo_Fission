@@ -4,8 +4,9 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime
 import base64
-from PIL import Image, ImageOps
-from io import BytesIO
+import cv2
+from tracker import Tracker
+import numpy as np
 
 load_dotenv()
 
@@ -72,38 +73,40 @@ def send_email_background(name, email, message):
 
 
 @celery.task
-def resize_image(image_data_list):
-    counter = 0
-    fixed_size = (224, 224)
-    results = {
-                "Team_A": {},
-                "Team_B": {}
-            }
+def sort_images(images_file):
+    result = {
+        "Team_A": {},
+        "Team_B": {}
+    }
+    try:
+        tracker = Tracker(os.getenv("MODEL"))
+        try:
+            for image in images_file:
+                # Convert bytes to NumPy array for OpenCV
+                filename = image["filename"]
+                # image_np_array = np.frombuffer(image["content"], np.uint8)
+                image = cv2.imdecode(image, cv2.IMREAD_COLOR)
 
-    for img_data in image_data_list:
-        counter += 1
-        filename = img_data["filename"]
-        content = img_data["content"]
-        
-        image = Image.open(BytesIO(content))
+                # Check for valid image
+                if image is None:
+                    print(f"Could not decode image: {filename}")
+                    continue
 
-        # Convert to RGB if image has alpha channel (RGBA)
-        if image.mode == "RGBA":
-            image = image.convert("RGB")
-        elif image.mode != "RGB":
-            image = image.convert("RGB")
+                # 🧠 Pass to your YOLOv11 tracker function
+                detected_image = tracker.detect_players(image)  # Should return `np.ndarray` (with .plot())
 
-        image = ImageOps.fit(image, fixed_size)
+                # Encode to JPEG and base64
+                success, buf = cv2.imencode(".jpg", detected_image)
+                if not success:
+                    print(f"Could not encode image: {image["filename"]}")
+                    continue
 
-        buffer = BytesIO()
-        image.save(buffer, format="JPEG")
-        buffer.seek(0)
-        b64_img = base64.b64encode(buffer.read()).decode("utf-8")
-        if counter >= 4:
-            results["Team_B"][filename] = b64_img
-        else:
-            results["Team_A"][filename] = b64_img
+                b64_img = base64.b64encode(buf.tobytes()).decode("utf-8")
+                result["Team_A"][filename] = b64_img
+                result["Team_B"][filename] = b64_img
+        except Exception as error:
+            raise error
 
-    print(results)
-
-    return results
+        return result
+    except Exception as error:
+        raise error

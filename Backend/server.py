@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel, EmailStr
-from tasks import send_email_background, resize_image
+from tasks import send_email_background, sort_images
 import os
 from celery.result import AsyncResult
 app = FastAPI()
@@ -13,29 +13,24 @@ class ContactForm(BaseModel):
 @app.post("/team_name")
 async def sortImage_based_teamName(files: list[UploadFile] = File(...)):
     """API to sort image according to the team name!!"""
-    image_payload = []
+    image_data = []
     for file in files:
         content = await file.read()
-        image_payload.append({
+        image_data.append({
             "filename": file.filename,
             "content": content
         })
+    task = sort_images.delay(image_data)
+    res = AsyncResult(task.id, app=sort_images)
+    # if res.ready():
 
-    task = resize_image.delay(image_payload)
-    return {"task_id": task.id, "msg": "Resizing in progress"}
+    return {"task_id": task.id, "msg": "Resizing in Progress"}
 
 
 @app.post("/jersey_number")
 async def sortImage_based_jerseyNumber(files: list[UploadFile] = File(...)):
     """API to sort image according to the jersey number!!"""
-    image_payload = []
-    for file in files:
-        content = await file.read()
-        image_payload.append({
-            "filename": file.filename,
-            "content": content
-        })
-    task = resize_image.delay(image_payload)
+    task = sort_images.delay([await f.read() for f in files], [f.filename for f in files])
     return {"task_id": task.id, "msg": "Resizing in Progress"}
 
 @app.post("/send_msg")
@@ -46,7 +41,7 @@ async def send_contact_email(data: ContactForm):
 
 @app.get("/get_images/{task_id}")
 def get_task_result(task_id: str):
-    res = AsyncResult(task_id, app=resize_image)
+    res = AsyncResult(task_id, app=sort_images)
     if res.ready():
         return {"status": "done", "images": res.result}
     return {"status": "processing"}

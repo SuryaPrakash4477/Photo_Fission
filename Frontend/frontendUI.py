@@ -112,13 +112,13 @@ if navigation == "🏠 Home":
                 files = []
                 for file in st.session_state.uploaded_files:
                     files.append(("files", (file.name, file, "image/jpeg")))
-
+                # print(files)
                 if st.session_state.sorting_type == "Team Name":
                     resp = requests.post("http://localhost:8000/team_name", files=files)
                     task_id = resp.json()["task_id"]
                 elif st.session_state.sorting_type == "Jersey Number":
                     resp = requests.post("http://localhost:8000/jersey_number", files=files)
-                    task_id = resp.json()["task_id"]
+                    task_id = resp.json()["task_id"] 
 
                 while True:
                     result = requests.get(f"http://localhost:8000/get_images/{task_id}").json()
